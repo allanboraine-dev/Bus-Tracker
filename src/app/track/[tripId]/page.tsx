@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import dynamic from "next/dynamic";
 import { supabase } from "@/lib/supabase";
 import { Bus, ChevronLeft, Clock, Navigation, MapPin, Gauge, RefreshCw } from "lucide-react";
@@ -46,6 +46,97 @@ export default function TrackPage({ params }: { params: { tripId: string } }) {
   const [progress, setProgress] = useState(0);
   const [distanceRemaining, setDistanceRemaining] = useState(0);
   const [nextStop, setNextStop] = useState("Loading...");
+
+  const [isDriving, setIsDriving] = useState(false);
+  const simulationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const currentStepRef = useRef(0);
+  const simulationPathRef = useRef<{lat: number, lng: number}[]>([]);
+
+  // Cleanup simulation interval on unmount
+  useEffect(() => {
+    return () => {
+      if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
+    };
+  }, []);
+
+  const startSimulation = async () => {
+    try {
+      const res = await fetch('/api/simulate');
+      const data = await res.json();
+      simulationPathRef.current = data.path;
+      currentStepRef.current = 0;
+      
+      if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
+      
+      const startPoint = data.path[0];
+      
+      // Optimistic update
+      setTripData(prev => ({
+        ...prev,
+        latitude: startPoint.lat,
+        longitude: startPoint.lng,
+        status_message: "Boarding - Cape Town Terminus",
+        current_speed: 0
+      }));
+      
+      // Trigger backend reset
+      await supabase.from("trips").update({
+        latitude: startPoint.lat,
+        longitude: startPoint.lng,
+        status_message: "Boarding - Cape Town Terminus",
+        current_speed: 0
+      }).eq("trip_code", params.tripId);
+      
+      setIsDriving(true);
+      
+      const tick = async () => {
+        currentStepRef.current++;
+        const step = currentStepRef.current;
+        const path = simulationPathRef.current;
+        
+        if (step >= path.length) {
+           if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
+           setIsDriving(false);
+           await supabase.from("trips").update({ status_message: "Arrived at Destination", current_speed: 0 }).eq("trip_code", params.tripId);
+           return;
+        }
+        
+        const coord = path[step];
+        const jhb = STOPS[STOPS.length - 1];
+        const distToJHB = calculateDistance(coord.lat, coord.lng, jhb.lat, jhb.lng);
+        const upcomingStop = STOPS.find(stop => {
+          const stopDistToJHB = calculateDistance(stop.lat, stop.lng, jhb.lat, jhb.lng);
+          return stopDistToJHB < (distToJHB - 10);
+        }) || jhb;
+
+        let status = `En Route to ${upcomingStop.name}`;
+        let currentSpeed = Math.floor(Math.random() * (105 - 90 + 1) + 90);
+
+        const distToBeaufort = calculateDistance(coord.lat, coord.lng, -32.3551, 22.5807);
+        if (distToBeaufort < 8) {
+          status = "Refreshment Stop: Beaufort West";
+          currentSpeed = 0;
+        }
+
+        const distToKimberley = calculateDistance(coord.lat, coord.lng, -28.7282, 24.7623);
+        if (distToKimberley < 8) {
+          status = "Refreshment Stop: Kimberley";
+          currentSpeed = 0;
+        }
+        
+        await supabase.from("trips").update({
+          latitude: coord.lat,
+          longitude: coord.lng,
+          status_message: status,
+          current_speed: currentSpeed,
+        }).eq("trip_code", params.tripId);
+      };
+      
+      simulationIntervalRef.current = setInterval(tick, 1500);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const processIncomingData = (newData: any) => {
     setTripData(newData);
@@ -143,23 +234,11 @@ export default function TrackPage({ params }: { params: { tripId: string } }) {
 
         {/* Demo Reset Button */}
         <button 
-          onClick={async () => {
-            // Optimistic update so the UI resets instantly
-            setTripData(prev => ({
-              ...prev,
-              latitude: -33.9249,
-              longitude: 18.4241,
-              status_message: "Boarding - Cape Town Terminus",
-              current_speed: 0
-            }));
-            
-            // Trigger backend reset
-            await fetch('/api/simulate?reset=true', { cache: 'no-store', method: 'GET' }).catch(console.error);
-          }}
-          className="pointer-events-auto p-3 bg-amber-500/20 hover:bg-amber-500/40 backdrop-blur-md border border-amber-500/50 rounded-2xl shadow-lg transition-all flex items-center gap-2 group"
-          title="Reset Demo Simulation"
+          onClick={startSimulation}
+          className={`pointer-events-auto p-3 backdrop-blur-md border rounded-2xl shadow-lg transition-all flex items-center gap-2 group ${isDriving ? 'bg-green-500/20 hover:bg-green-500/40 border-green-500/50' : 'bg-amber-500/20 hover:bg-amber-500/40 border-amber-500/50'}`}
+          title={isDriving ? "Simulation Running" : "Reset Demo Simulation"}
         >
-          <RefreshCw className="w-5 h-5 text-amber-400 group-active:animate-spin" />
+          <RefreshCw className={`w-5 h-5 ${isDriving ? 'text-green-400 animate-spin' : 'text-amber-400 group-active:animate-spin'}`} />
         </button>
       </div>
 
