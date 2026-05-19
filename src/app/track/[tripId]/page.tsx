@@ -79,13 +79,19 @@ export default function TrackPage({ params }: { params: { tripId: string } }) {
         current_speed: 0
       }));
       
-      // Trigger backend reset
-      await supabase.from("trips").update({
+      let resetPayload: any = {
         latitude: startPoint.lat,
         longitude: startPoint.lng,
         status_message: "Boarding - Cape Town Terminus",
         current_speed: 0
-      }).eq("trip_code", params.tripId);
+      };
+      
+      let resetRes = await supabase.from("trips").update(resetPayload).eq("trip_code", params.tripId);
+      
+      if (resetRes.error && resetRes.error.message && resetRes.error.message.includes('current_speed')) {
+        delete resetPayload.current_speed;
+        await supabase.from("trips").update(resetPayload).eq("trip_code", params.tripId);
+      }
       
       setIsDriving(true);
       
@@ -124,12 +130,19 @@ export default function TrackPage({ params }: { params: { tripId: string } }) {
           currentSpeed = 0;
         }
         
-        await supabase.from("trips").update({
+        let updatePayload: any = {
           latitude: coord.lat,
           longitude: coord.lng,
           status_message: status,
           current_speed: currentSpeed,
-        }).eq("trip_code", params.tripId);
+        };
+        
+        let { error } = await supabase.from("trips").update(updatePayload).eq("trip_code", params.tripId);
+        
+        if (error && error.message && error.message.includes('current_speed')) {
+          delete updatePayload.current_speed;
+          await supabase.from("trips").update(updatePayload).eq("trip_code", params.tripId);
+        }
       };
       
       simulationIntervalRef.current = setInterval(tick, 1500);
